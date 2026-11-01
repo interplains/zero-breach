@@ -51,6 +51,7 @@ updates or establish that a device is safe.
 | **Browser** | history, cookies (host names and timestamps only), favicons, HTTP cache, Local/Session Storage, Service Worker caches, and HSTS/connection records — across Chrome, Edge, Brave, Vivaldi, Chromium and Firefox, plus Safari's history, cookies and caches on macOS, for discovered profiles in supported locations |
 | **Files** | SHA-256 of candidate files under the user-writable locations spyware drops into, against known sample hashes — and, kept deliberately separate, the hash of a legitimate signed driver this actor abuses, which is reported as a lead rather than as proof |
 | **Host** (Windows) | per-user COM registrations (this campaign's documented persistence), the DNS resolver cache, whether DNS history logging is even enabled, the hosts file, and known fixed-path driver drops (e.g. the `HW.sys` vulnerable driver) |
+| **Host** (macOS) | launchd auto-start items in `~/Library/LaunchAgents`, `/Library/LaunchAgents` and `/Library/LaunchDaemons`, the hosts file, and the system's record of where downloaded files came from. Windows-only checks stay reported as gaps; macOS keeps no searchable DNS history by default |
 
 Every match is **evidence-graded**, because the artifact decides the meaning.
 Cookie metadata and stored connection records can support a contact finding,

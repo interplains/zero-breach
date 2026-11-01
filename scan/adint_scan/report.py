@@ -153,6 +153,8 @@ _METRIC_LABELS = {
     "dns_log_events_scanned": "DNS history events searched",
     "hosts_entries": "entries in the hosts file",
     "hosts_blocked_indicators": "   of those, indicators you are BLOCKING (good)",
+    "launch_items": "macOS auto-start items read",
+    "download_records": "macOS download records checked",
     "known_paths_checked": "known malware file-paths checked",
     "known_paths_present": "   of those, a file is present at (see notes)",
 }

@@ -33,22 +33,30 @@ Ported from scripts/scan_host.ps1. Four checks, and the reason each one exists:
      *block* (protective, not reported as a hit); only a mapping to a real
      address is a finding.
 
+On macOS the COM, DNS and fixed-path checks have no equivalent and stay reported
+as gaps. Three other checks run there: launchd auto-start items, the hosts file,
+and the record of where downloaded files came from.
+
 Read-only throughout: this module never writes the registry, never enables the
 log, and needs no administrator (D7).
 """
 
 from __future__ import annotations
 
+import datetime
 import io
 import json
 import os
 from ..localpaths import path_problem
 import platform
+import plistlib
 import re
+import sqlite3
 import subprocess
 
-from ..result import (Hit, ModuleResult, EV_DNS,
+from ..result import (Hit, ModuleResult, EV_DNS, EV_CONTACTED,
                       EV_PERSISTENCE, EV_CONFIGURED, EV_REFERENCED, EV_ON_DISK)
+from .browser import _discard_snapshot, _fmt_time, _host_matches, _host_of, copy_locked
 
 NAME = "host"
 
@@ -794,9 +802,15 @@ def _check_dns_log(r: ModuleResult, ctx) -> None:
 
 # --- 4. hosts file ----------------------------------------------------------
 
-def _check_hosts(r: ModuleResult, ctx) -> None:
+def _hosts_path() -> str:
+    if platform.system() == "Darwin":
+        return "/etc/hosts"
     root = os.environ.get("SystemRoot", r"C:\Windows")
-    path = os.path.join(root, "System32", "drivers", "etc", "hosts")
+    return os.path.join(root, "System32", "drivers", "etc", "hosts")
+
+
+def _check_hosts(r: ModuleResult, ctx) -> None:
+    path = _hosts_path()
     ctx.emit("[host] reading {}".format(path))
     problem = path_problem(path)
     if problem:
@@ -947,6 +961,180 @@ def _check_known_paths(r: ModuleResult, ctx) -> None:
         len(_KNOWN_DROPS), found))
 
 
+# --- macOS: launchd auto-start items -----------------------------------------
+
+_LAUNCH_ITEM_MAX_BYTES = 1024 * 1024
+_PLIST_MAX_DEPTH = 32
+
+
+def _launch_dirs():
+    """Where launchd takes third-party jobs from. /System/Library is left out:
+    it holds Apple's own jobs on a volume that normal software cannot change."""
+    return [os.path.join(os.path.expanduser("~"), "Library", "LaunchAgents"),
+            "/Library/LaunchAgents", "/Library/LaunchDaemons"]
+
+
+def _plist_strings(value, depth=0):
+    """Every string in a parsed plist, so an indicator is found wherever a job
+    keeps it: its program, its arguments or its environment."""
+    if depth > _PLIST_MAX_DEPTH:
+        raise ValueError("plist is nested too deeply")
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield str(key)
+            yield from _plist_strings(item, depth + 1)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _plist_strings(item, depth + 1)
+
+
+def _check_launch_items(r: ModuleResult, ctx) -> None:
+    """A Hit only when a job names an indicator (D4). Many honest programs add
+    launchd jobs, so an unfamiliar job is not a finding on its own."""
+    ctx.emit("[host] reading launchd auto-start items")
+    read = 0
+    problems = []
+    for folder in _launch_dirs():
+        try:
+            problem = path_problem(folder)
+            if problem:
+                raise PermissionError(13, problem, folder)
+            with os.scandir(folder) as entries:
+                names = sorted(entry.name for entry in entries)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            r.skipped += 1
+            problems.append("could not list {}: {}".format(folder, exc))
+            continue
+        for name in names:
+            if not name.endswith(".plist"):
+                continue
+            path = os.path.join(folder, name)
+            # A damaged plist can raise many exception types. Whichever it is,
+            # this one item is a gap and the rest are still read.
+            try:
+                problem = path_problem(path)
+                if problem:
+                    raise PermissionError(13, problem, path)
+                if os.path.getsize(path) > _LAUNCH_ITEM_MAX_BYTES:
+                    raise OSError(27, "larger than the read limit", path)
+                with io.open(path, "rb") as fh:
+                    strings = list(_plist_strings(plistlib.loads(fh.read())))
+            except Exception as exc:
+                r.skipped += 1
+                problems.append("could not read {}: {}".format(path, exc))
+                continue
+            read += 1
+            _match(r, ctx, " ".join([name] + strings), path,
+                   "launchd auto-start item references indicator {ioc} - "
+                   "investigate this item and the program it runs",
+                   EV_PERSISTENCE)
+    r.checked += read
+    r.submetrics["launch_items"] = read
+    if read or not problems:
+        r.ran("launch-items")
+    if problems:
+        r.could_not_run("launch-items (partial)" if read else "launch-items",
+                        "{} location(s) or item(s) were not checked, so an "
+                        "auto-start item may have been missed: {}".format(
+                            len(problems), "; ".join(problems[:3])))
+    ctx.emit("[host] launchd items read: {} ({} not checked)".format(
+        read, len(problems)))
+
+
+# --- macOS: where downloaded files came from ---------------------------------
+
+def _download_sources_path() -> str:
+    return os.path.join(os.path.expanduser("~"), "Library", "Preferences",
+                        "com.apple.LaunchServices.QuarantineEventsV2")
+
+
+def _download_time(seconds):
+    # macOS stores seconds since 2001-01-01 (the Cocoa epoch).
+    return datetime.datetime(2001, 1, 1) + datetime.timedelta(seconds=seconds)
+
+
+def _check_download_sources(r: ModuleResult, ctx) -> None:
+    """macOS records the address of files that apps download. It outlives browser
+    caches and can reach back years, so it may cover a campaign period the browser
+    data no longer does. Only rows that match an indicator reach the report."""
+    path = _download_sources_path()
+    ctx.emit("[host] reading the record of download sources")
+    try:
+        problem = path_problem(path)
+        if problem:
+            raise PermissionError(13, problem, path)
+        os.stat(path)
+        tmp, incomplete = copy_locked(path)
+    except FileNotFoundError:
+        r.note("download-sources: macOS holds no download record for this "
+               "account. It may have been cleared; this says nothing about the past.")
+        r.ran("download-sources")
+        return
+    except OSError as exc:
+        r.skipped += 1
+        r.could_not_run("download-sources", "could not read {}: {}".format(path, exc))
+        return
+    con = None
+    try:
+        try:
+            con = sqlite3.connect(tmp)
+            con.text_factory = lambda b: b.decode("utf-8", "replace")
+            rows = con.execute(
+                "SELECT LSQuarantineDataURLString, LSQuarantineOriginURLString, "
+                "LSQuarantineTimeStamp FROM LSQuarantineEvent").fetchall()
+        except sqlite3.Error as exc:
+            r.skipped += 1
+            r.could_not_run("download-sources",
+                            "could not read {}: {}".format(path, exc))
+            return
+        oldest = None
+        for data_url, origin_url, stamp in rows:
+            try:
+                when = _download_time(float(stamp)) if stamp else None
+            except (TypeError, ValueError, OverflowError):
+                when = None
+            if when is not None and (oldest is None or when < oldest):
+                oldest = when
+            for url, what in ((data_url, "file address"), (origin_url, "page address")):
+                blob = str(url or "").lower()
+                if not blob:
+                    continue
+                host_ind = _host_matches(_host_of(blob), ctx.iocs)
+                for ind in ctx.iocs.most_specific(ctx.iocs.search(blob)):
+                    # A record whose host IS the indicator means something was
+                    # fetched from it. Elsewhere in the address, it is only a mention.
+                    contacted = host_ind is not None and host_ind.value == ind.value
+                    r.add_hit(Hit(
+                        indicator=ind.value, location=path,
+                        detail="download record, {}: {}".format(what, blob[:160]),
+                        tier=ind.tier, confidence=ind.confidence, source=ind.source,
+                        evidence=EV_CONTACTED if contacted else EV_REFERENCED,
+                        observed=_fmt_time(_download_time, stamp) if contacted else ""))
+        r.checked += len(rows)
+        r.submetrics["download_records"] = len(rows)
+        if oldest is not None:
+            r.reach["download-sources"] = {
+                "earliest": oldest.isoformat(timespec="seconds"),
+                "days": max(0, (datetime.datetime.now() - oldest).days),
+                "basis": "oldest of {:,} download records".format(len(rows)),
+                "note": "This covers downloaded files only, not pages or ads that "
+                        "were merely shown. Clearing history can erase it.",
+            }
+        if incomplete:
+            r.could_not_run("download-sources (partial)",
+                            "could not copy {}, so recent records may be missing"
+                            .format(", ".join(incomplete)))
+        r.ran("download-sources")
+    finally:
+        if not _discard_snapshot(os.path.dirname(tmp), con):
+            r.note("could not remove the temporary snapshot of the download "
+                   "record - a copy may remain in the system temp directory")
+
+
 # --- module entry point -----------------------------------------------------
 
 def run(ctx) -> ModuleResult:
@@ -957,6 +1145,20 @@ def run(ctx) -> ModuleResult:
     ctx.partial = r
 
     system = platform.system()
+    if system == "Darwin":
+        # Never a fake CLEAN for the checks that have no macOS equivalent.
+        for name in ("com-persistence", "dns-cache", "dns-log", "known-paths"):
+            r.could_not_run(name, "not supported on Darwin")
+        for name, fn in (("launch-items", _check_launch_items),
+                         ("hosts-file", _check_hosts),
+                         ("download-sources", _check_download_sources)):
+            try:
+                fn(r, ctx)
+            except Exception as exc:
+                r.skipped += 1
+                r.could_not_run(name, "{}: {}".format(type(exc).__name__, exc))
+        return r
+
     if system != "Windows" or winreg is None:
         # Never a fake CLEAN on a platform where nothing was observed.
         reason = "not supported on {}".format(system or "unknown platform")
