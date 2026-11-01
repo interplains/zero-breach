@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import base64
 import datetime
+import errno
 import hashlib
 import io
 import json
@@ -347,14 +348,25 @@ def _fmt_time(conv, raw):
         return ""
 
 
+# ERROR_SHARING_VIOLATION and ERROR_LOCK_VIOLATION: another process holds the file.
+_WINDOWS_LOCK_ERRORS = (32, 33)
+
+
 def _locked_note(path, exc):
     """A locked database is the most common non-error a user will see, so say
     what it means and what to do rather than printing a raw errno.
 
     A running browser causes this two ways: the OS refuses the snapshot with a
-    sharing violation (PermissionError / errno 13 on Windows), or SQLite reports
-    "database is locked" when the copy is opened. Both mean the same thing to the
-    person reading the report: close the browser and run again."""
+    sharing violation (Windows error 32 or 33), or SQLite reports "database is
+    locked" when the copy is opened. Both mean the same thing to the person
+    reading the report: close the browser and run again.
+
+    Every other refusal is NOT a lock. macOS privacy protection refuses a closed
+    browser's folder with EPERM, and telling that person to close a browser that
+    is not open sends them in circles while the browser stays unchecked. The
+    reason comes from strerror rather than str(exc), which also holds the path:
+    a folder named "blocked" must not read as a locked database."""
+    reason = getattr(exc, "strerror", None) or str(exc)
     leftover = getattr(exc, "snapshot_leftover", "")
     cleanup_warning = (
         " WARNING: temporary snapshot cleanup failed; a copy of browser data "
@@ -368,12 +380,24 @@ def _locked_note(path, exc):
         if marker in lowered:
             browser_name = label
             break
-    if (isinstance(exc, PermissionError) or getattr(exc, "errno", None) == 13
-            or "locked" in str(exc).lower()):
+    if (getattr(exc, "winerror", None) in _WINDOWS_LOCK_ERRORS
+            or "locked" in reason.lower()):
         return ("{} was running, so one of its databases was locked and could "
                 "not be checked ({}). Close {} and run again to cover it."
                 .format(browser_name, os.path.basename(path), browser_name)
                 + cleanup_warning)
+    if (isinstance(exc, PermissionError)
+            or getattr(exc, "errno", None) in (errno.EPERM, errno.EACCES)):
+        hint = ""
+        if sys.platform == "darwin" and getattr(exc, "errno", None) == errno.EPERM:
+            hint = (" macOS privacy protection can cause this. Run the scan in "
+                    "the Terminal app and allow access if asked. If it is still "
+                    "refused, give Terminal Full Disk Access in System Settings "
+                    "> Privacy & Security, and turn that off after the scan.")
+        return ("{} data could not be read ({}): {}. Its database is not "
+                "reported as locked, so closing {} may not help.{}".format(
+                    browser_name, os.path.basename(path), reason,
+                    browser_name, hint) + cleanup_warning)
     return "could not read {}: {}".format(path, exc) + cleanup_warning
 
 
