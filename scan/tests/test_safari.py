@@ -209,6 +209,12 @@ class TestCacheAndAccess(SafariBase):
         self.assertEqual(result.hits[0].evidence, EV_REFERENCED)
         self.assertEqual(result.submetrics["blob"], 1)
 
+    def test_long_cache_search_announces_itself(self):
+        messages = []
+        self.ctx.emit = messages.append
+        self.scan()
+        self.assertTrue(any("searching" in m and "WebKit" in m for m in messages))
+
     def test_refused_folder_is_a_gap_with_the_real_reason(self):
         denied = os.path.join(self.library, "Safari")
         os.makedirs(denied)

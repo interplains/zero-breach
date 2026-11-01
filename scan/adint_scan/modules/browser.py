@@ -1501,6 +1501,9 @@ def run(ctx) -> ModuleResult:
         for root in (os.path.join(container, "Caches", "com.apple.Safari"),
                      os.path.join(safari_library, "Caches", "com.apple.Safari"),
                      os.path.join(container, "WebKit", "WebsiteData")):
+            # These can hold tens of thousands of files and take minutes, which
+            # looks like a hang unless the scan says what it is doing.
+            ctx.emit("[*]   searching {}".format(root))
             scan_blobs("safari", root, EV_REFERENCED)
 
     # Nothing written after this point should inherit a stale profile name.
