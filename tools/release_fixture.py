@@ -110,6 +110,11 @@ def main():
 
     allowed = (root, ROOT, Path(sys.prefix).absolute(), Path(sys.prefix).resolve(),
                Path(sys.base_prefix).absolute(), Path(sys.base_prefix).resolve())
+    # Python's own bytecode cache. The Python that ships with Xcode keeps it under
+    # ~/Library/Caches, so loading a standard-library module would otherwise look
+    # like the scanner reading outside its fixture.
+    if sys.pycache_prefix:
+        allowed += (Path(sys.pycache_prefix).absolute(),)
 
     def within(path):
         # Lexical only; no link resolution before the scanner's locality guard.
