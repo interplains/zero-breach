@@ -79,16 +79,17 @@ class BrowserLaunchBase(unittest.TestCase):
             fh.write("{}\tdelivery\tprimary\ttest-source\n".format(TEST_DOMAIN))
         self.ctx = ScanContext(iocs=iocmod.load(ioc_path), emit=lambda _m: None)
         self._saved = (browser.CHROMIUM_ROOTS, browser.ROAMING, browser.LOCAL,
-                       browser.copy_locked, browser.FIREFOX_ROOTS)
+                       browser.copy_locked, browser.FIREFOX_ROOTS, browser.SAFARI_LIBRARY)
         # No Firefox in these Chromium tests. Pin it to [] so the suite never
         # reads the tester's real Firefox profile (it would on macOS/Linux, where
         # _firefox_roots ignores ROAMING/LOCAL) and so an all-locked Chromium run
         # rolls up to UNKNOWN, not PARTIAL.
+        browser.SAFARI_LIBRARY = ""
         browser.FIREFOX_ROOTS = []
 
     def tearDown(self):
         (browser.CHROMIUM_ROOTS, browser.ROAMING, browser.LOCAL,
-         browser.copy_locked, browser.FIREFOX_ROOTS) = self._saved
+         browser.copy_locked, browser.FIREFOX_ROOTS, browser.SAFARI_LIBRARY) = self._saved
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def run_chromium(self, root):
@@ -257,18 +258,19 @@ class FirefoxArtifactBase(unittest.TestCase):
             fh.write("{}\tdelivery\tprimary\ttest-source\n".format(TEST_DOMAIN))
         self.ctx = ScanContext(iocs=iocmod.load(ioc_path), emit=lambda _m: None)
         self._saved = (browser.CHROMIUM_ROOTS, browser.ROAMING, browser.LOCAL,
-                       browser.FIREFOX_ROOTS)
+                       browser.FIREFOX_ROOTS, browser.SAFARI_LIBRARY)
         browser.CHROMIUM_ROOTS = []           # no Chromium browsers at all
         browser.LOCAL = os.path.join(self.tmp, "Local")  # no Firefox cache there
         os.makedirs(browser.LOCAL)
         # Point Firefox straight at the planted profile tree, on every OS - the
         # explicit override is what makes this test hermetic on macOS/Linux too.
+        browser.SAFARI_LIBRARY = ""
         browser.FIREFOX_ROOTS = [(os.path.join(self.roaming, "Mozilla", "Firefox",
                                                "Profiles"), browser.LOCAL)]
 
     def tearDown(self):
         (browser.CHROMIUM_ROOTS, browser.ROAMING, browser.LOCAL,
-         browser.FIREFOX_ROOTS) = self._saved
+         browser.FIREFOX_ROOTS, browser.SAFARI_LIBRARY) = self._saved
         shutil.rmtree(self.tmp, ignore_errors=True)
 
 

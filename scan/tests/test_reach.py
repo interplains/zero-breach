@@ -135,18 +135,19 @@ class TestCookieWindowMeasured(unittest.TestCase):
         ctx = ScanContext(iocs=iocmod.load(ioc_path), emit=lambda _m: None)
 
         saved = (browser.CHROMIUM_ROOTS, browser.ROAMING, browser.LOCAL,
-                 browser.FIREFOX_ROOTS)
+                 browser.FIREFOX_ROOTS, browser.SAFARI_LIBRARY)
         empty = os.path.join(tmp, "empty")
         os.makedirs(empty)
         try:
             browser.CHROMIUM_ROOTS = [("test", root)]
             browser.ROAMING = empty
             browser.LOCAL = empty
+            browser.SAFARI_LIBRARY = ""
             browser.FIREFOX_ROOTS = []
             r = browser.run(ctx)
         finally:
             (browser.CHROMIUM_ROOTS, browser.ROAMING, browser.LOCAL,
-             browser.FIREFOX_ROOTS) = saved
+             browser.FIREFOX_ROOTS, browser.SAFARI_LIBRARY) = saved
 
         self.assertIn("cookies", r.reach,
                       "the cookie store reaches furthest back; omitting it "

@@ -48,7 +48,7 @@ updates or establish that a device is safe.
 
 | area | what it reads |
 |---|---|
-| **Browser** | history, cookies (host names and timestamps only), favicons, HTTP cache, Local/Session Storage, Service Worker caches, and HSTS/connection records — across Chrome, Edge, Brave, Vivaldi, Chromium and Firefox, for discovered profiles in supported locations |
+| **Browser** | history, cookies (host names and timestamps only), favicons, HTTP cache, Local/Session Storage, Service Worker caches, and HSTS/connection records — across Chrome, Edge, Brave, Vivaldi, Chromium and Firefox, plus Safari's history, cookies and caches on macOS, for discovered profiles in supported locations |
 | **Files** | SHA-256 of candidate files under the user-writable locations spyware drops into, against known sample hashes — and, kept deliberately separate, the hash of a legitimate signed driver this actor abuses, which is reported as a lead rather than as proof |
 | **Host** (Windows) | per-user COM registrations (this campaign's documented persistence), the DNS resolver cache, whether DNS history logging is even enabled, the hosts file, and known fixed-path driver drops (e.g. the `HW.sys` vulnerable driver) |
 
@@ -65,6 +65,7 @@ connection evidence so that each finding can be interpreted in context.
 | ------ | -------- | ------------------------- |
 | Chromium | Chrome, Edge, Brave, **Vivaldi**, Chromium | Windows `%LOCALAPPDATA%\\<vendor>\\User Data`; macOS `~/Library/Application Support/<vendor>`; Linux `~/.config/<vendor>` plus snap and Flatpak locations |
 | Firefox | Firefox | standard profile and cache directories |
+| WebKit | Safari (macOS) | `~/Library/Safari`, `~/Library/Caches/com.apple.Safari` and the Safari sandbox under `~/Library/Containers/com.apple.Safari` |
 
 Vivaldi paths: `%LOCALAPPDATA%\\Vivaldi\\User Data` (Windows),
 `~/Library/Application Support/Vivaldi` (macOS), `~/.config/vivaldi`,
@@ -73,6 +74,12 @@ Vivaldi paths: `%LOCALAPPDATA%\\Vivaldi\\User Data` (Windows),
 yet. Unsupported browsers and custom profile locations are not checked and may
 not appear in the report; a no-match result does not cover them. Close the
 browser before scanning so its databases are not locked.
+
+Safari's cookie file is read in place, so no copy of it reaches disk, and its
+parser takes host names, cookie names and dates but never the cookie value. Its
+favicon and HSTS records are not read yet. macOS privacy protection can refuse
+access to Safari or another browser's folder for the app running the scan. That
+is reported as a gap, and the report says how to allow it.
 
 > **Release note:** Vivaldi support is included in v0.1.2. Earlier downloads
 > do not include it. Verify each version against its own signature and checksum.

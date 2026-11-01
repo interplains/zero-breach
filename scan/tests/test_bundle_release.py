@@ -62,6 +62,7 @@ class TestDownloadedEntryPoint(unittest.TestCase):
             stack.enter_context(patch.object(b, "CHROMIUM_ROOTS",
                                              [("test", str(self.ud))]))
             stack.enter_context(patch.object(b, "FIREFOX_ROOTS", []))
+            stack.enter_context(patch.object(b, "SAFARI_LIBRARY", ""))
             # Never inspect the runner's files, registry, DNS or browser data.
             stack.enter_context(patch.object(b, "run_hash",
                                              lambda ctx: b.ModuleResult("hash")))

@@ -35,6 +35,7 @@ import json
 import os
 import shutil
 import sqlite3
+import struct
 import sys
 import tempfile
 from urllib.parse import urlsplit
@@ -146,6 +147,65 @@ def _firefox_roots():
                           "mozilla", "firefox")),
         ]
     return []
+
+
+# The ~/Library that holds Safari's data. None means "derive it at run() time";
+# tests set a fixture path, or "" for no Safari, so the suite never reads the
+# tester's real one.
+SAFARI_LIBRARY = None
+
+
+def _safari_library():
+    """~/Library on macOS, the only platform Safari runs on; "" elsewhere."""
+    if sys.platform != "darwin":
+        return ""
+    return os.path.join(os.path.expanduser("~"), "Library")
+
+
+# Largest Cookies.binarycookies we will load. Real ones are a few MB.
+_MAX_SAFARI_COOKIE_BYTES = 256 * 1024 * 1024
+_SAFARI_COOKIE_RECORD_MIN = 56
+
+
+def _safari_cstring(record, start):
+    end = record.find(b"\0", start)
+    if start < 0 or end < 0:
+        raise ValueError("cookie text field is outside its record")
+    return record[start:end].decode("utf-8", "replace")
+
+
+def _safari_cookie_records(data):
+    """Yield (host, name, created_seconds) from a Cookies.binarycookies file.
+
+    Safari keeps cookies in this binary format rather than in SQLite, so there is
+    no SELECT to narrow what is read. Each record holds an offset to the cookie's
+    value; this parser takes the host and name offsets and never follows that one,
+    which keeps the value out of everything it returns. Raises ValueError on a
+    malformed file, after yielding whatever preceded the damage.
+    """
+    if data[:4] != b"cook":
+        raise ValueError("not a Safari cookie file")
+    try:
+        count = struct.unpack_from(">I", data, 4)[0]
+        sizes = struct.unpack_from(">{}I".format(count), data, 8)
+        start = 8 + 4 * count
+        for size in sizes:
+            page = data[start:start + size]
+            if len(page) != size:
+                raise ValueError("cookie page is truncated")
+            start += size
+            cookies = struct.unpack_from("<I", page, 4)[0]
+            for offset in struct.unpack_from("<{}I".format(cookies), page, 8):
+                length = struct.unpack_from("<I", page, offset)[0]
+                record = page[offset:offset + length]
+                if length < _SAFARI_COOKIE_RECORD_MIN or len(record) != length:
+                    raise ValueError("cookie record is truncated")
+                host_at, name_at = struct.unpack_from("<II", record, 16)
+                created = struct.unpack_from("<d", record, 48)[0]
+                yield (_safari_cstring(record, host_at),
+                       _safari_cstring(record, name_at), created)
+    except struct.error as exc:
+        raise ValueError("malformed cookie file: {}".format(exc))
 
 
 # Largest browser database we will snapshot, siblings included. Real History /
@@ -376,7 +436,7 @@ def _locked_note(path, exc):
     lowered = path.lower()
     for marker, label in (("bravesoftware", "Brave"), ("vivaldi", "Vivaldi"),
                           ("google", "Chrome"), ("microsoft", "Edge"),
-                          ("mozilla", "Firefox")):
+                          ("mozilla", "Firefox"), ("safari", "Safari")):
         if marker in lowered:
             browser_name = label
             break
@@ -1177,10 +1237,121 @@ def run(ctx) -> ModuleResult:
                 "Firefox HSTS state recorded for this host - the browser "
                 "received an HSTS header from it over HTTPS", EV_CONTACTED)
 
+    def safari_time(seconds):
+        # Safari stores seconds since 2001-01-01 (the Cocoa epoch).
+        return datetime.datetime(2001, 1, 1) + datetime.timedelta(seconds=seconds)
+
+    def safari_entries(folder, kind):
+        """Names in a Safari folder. Absent is not a gap; a refusal is one.
+
+        macOS privacy protection usually refuses at this point, so asking here
+        gives the report the real reason and its hint."""
+        try:
+            problem = path_problem(folder)
+            if problem:
+                raise PermissionError(13, problem, folder)
+            return os.listdir(folder)
+        except FileNotFoundError:
+            return []
+        except OSError as exc:
+            r.skipped += 1
+            mark_fail("safari", kind, _locked_note(folder, exc))
+            return []
+
+    def scan_safari_history(path):
+        """History.db, graded the same way as the other browsers' history."""
+        label, kind = "safari", "history"
+        opened = open_db(path, label, kind)
+        if opened is None:
+            return
+        con, tmp = opened
+        try:
+            try:
+                rows = con.execute(
+                    "SELECT history_items.url, history_visits.title, "
+                    "MAX(history_visits.visit_time) "
+                    "FROM history_items LEFT JOIN history_visits "
+                    "ON history_visits.history_item = history_items.id "
+                    "GROUP BY history_items.id").fetchall()
+            except sqlite3.Error as exc:
+                r.skipped += 1
+                mark_fail(label, kind, _locked_note(path, exc))
+                return
+            mark_ok(label, kind)
+            _count_db()
+            if rows:
+                history_rows[0] = True
+            for url, title, visited in rows:
+                blob = (str(url or "") + " " + str(title or "")).lower()
+                host_ind = _host_matches(_host_of(str(url or "")), ctx.iocs)
+                for ind in ctx.iocs.most_specific(ctx.iocs.search(blob)):
+                    # An item with no visit row was never loaded by this record's
+                    # account of it, so its URL alone does not establish contact.
+                    if (visited is not None and host_ind is not None
+                            and host_ind.value == ind.value):
+                        record_hit(path, ind, "history: " + blob[:160],
+                                   EV_CONTACTED, _fmt_time(safari_time, visited))
+                    else:
+                        record_hit(path, ind, "history: " + blob[:160],
+                                   EV_REFERENCED)
+        finally:
+            # Close the handle BEFORE removing, or the copy can survive.
+            if not _discard_snapshot(os.path.dirname(tmp), con):
+                r.note("could not remove the temporary snapshot of {} - a copy "
+                       "may remain in the system temp directory"
+                       .format(os.path.basename(path)))
+
+    def scan_safari_cookies(path):
+        """Cookies.binarycookies. Read in place, so no copy of it reaches disk.
+
+        A file damaged part way through keeps the hits found before the damage,
+        and the unread remainder is a gap rather than a clean result."""
+        label, kind = "safari", "cookies"
+        try:
+            problem = path_problem(path)
+            if problem:
+                raise PermissionError(13, problem, path)
+            size = os.path.getsize(path)
+            if size > _MAX_SAFARI_COOKIE_BYTES:
+                raise OSError(27, "cookie file is {:,} bytes, over the {:,}-byte "
+                              "limit, so it was not read".format(
+                                  size, _MAX_SAFARI_COOKIE_BYTES), path)
+            with io.open(path, "rb") as fh:
+                data = fh.read()
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            r.skipped += 1
+            mark_fail(label, kind, _locked_note(path, exc))
+            return
+        try:
+            for host, name, created in _safari_cookie_records(data):
+                try:
+                    when = safari_time(int(created)) if created > 0 else None
+                except (ValueError, OverflowError):
+                    when = None
+                if when is not None:
+                    cookie_times.append(when)
+                for ind in ctx.iocs.most_specific(ctx.iocs.search(host.lower())):
+                    stamp = when.isoformat(timespec="seconds") if when else ""
+                    bits = ["cookie set by {}".format(host),
+                            "name {}".format(name or "?")]
+                    if stamp:
+                        bits.append("first set {}".format(stamp))
+                    record_hit(path, ind, "; ".join(bits), EV_CONTACTED, stamp)
+        except ValueError as exc:
+            r.skipped += 1
+            mark_fail(label, kind, "could not read {}: {}".format(path, exc))
+            return
+        mark_ok(label, kind)
+        _count_db()
+        cookie_stores[0] += 1
+
     # No browser profile location is known for this platform at all: say so as a
     # gap rather than returning an empty, falsely-clean result.
     ff_roots = FIREFOX_ROOTS if FIREFOX_ROOTS is not None else _firefox_roots()
-    if not CHROMIUM_ROOTS and not ff_roots:
+    safari_library = SAFARI_LIBRARY if SAFARI_LIBRARY is not None else _safari_library()
+    if not CHROMIUM_ROOTS and not ff_roots and not safari_library:
         r.could_not_run("browser", "no browser profile locations are known for "
                         "{}".format(sys.platform))
         return r
@@ -1301,6 +1472,36 @@ def run(ctx) -> ModuleResult:
                     os.path.join(prof, "SiteSecurityServiceState.txt"))
             if os.path.isdir(cprof):
                 scan_blobs("firefox", cprof, EV_REFERENCED)
+
+    # --- Safari: macOS only; its data sits in ~/Library and in its sandbox ------
+    current["name"] = ""
+    if safari_library:
+        container = os.path.join(safari_library, "Containers", "com.apple.Safari",
+                                 "Data", "Library")
+        ctx.emit("[*] Safari ({})".format(safari_library))
+        for folder in (os.path.join(safari_library, "Safari"),
+                       os.path.join(container, "Safari")):
+            names = safari_entries(folder, "history")
+            if "History.db" in names:
+                current["name"] = ""
+                scan_safari_history(os.path.join(folder, "History.db"))
+            if "Profiles" in names:
+                profiles = os.path.join(folder, "Profiles")
+                for name in sorted(safari_entries(profiles, "history")):
+                    current["name"] = name
+                    scan_safari_history(os.path.join(profiles, name, "History.db"))
+        current["name"] = ""
+        # The sandboxed store replaced the older one, so a stale ~/Library/Cookies
+        # is read only when the current store is not there.
+        for folder in (os.path.join(container, "Cookies"),
+                       os.path.join(safari_library, "Cookies")):
+            if "Cookies.binarycookies" in safari_entries(folder, "cookies"):
+                scan_safari_cookies(os.path.join(folder, "Cookies.binarycookies"))
+                break
+        for root in (os.path.join(container, "Caches", "com.apple.Safari"),
+                     os.path.join(safari_library, "Caches", "com.apple.Safari"),
+                     os.path.join(container, "WebKit", "WebsiteData")):
+            scan_blobs("safari", root, EV_REFERENCED)
 
     # Nothing written after this point should inherit a stale profile name.
     current["name"] = ""

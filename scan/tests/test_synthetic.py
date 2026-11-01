@@ -159,15 +159,16 @@ class TestBrowserModuleSyntheticPositive(SyntheticBase):
         self.empty = os.path.join(self.tmp, "empty")
         os.makedirs(self.empty)
         self._saved = (browser.CHROMIUM_ROOTS, browser.ROAMING, browser.LOCAL,
-                       browser.FIREFOX_ROOTS)
+                       browser.FIREFOX_ROOTS, browser.SAFARI_LIBRARY)
         browser.CHROMIUM_ROOTS = [("test", self.root)]
         browser.ROAMING = self.empty
         browser.LOCAL = self.empty
+        browser.SAFARI_LIBRARY = ""
         browser.FIREFOX_ROOTS = []   # hermetic: never read the real Firefox
 
     def tearDown(self):
         (browser.CHROMIUM_ROOTS, browser.ROAMING, browser.LOCAL,
-         browser.FIREFOX_ROOTS) = self._saved
+         browser.FIREFOX_ROOTS, browser.SAFARI_LIBRARY) = self._saved
         super().tearDown()
 
     def test_detects_the_domain_in_both_sqlite_and_blob_artifacts(self):
@@ -259,16 +260,17 @@ class TestNoModuleReportsCleanWhenItFoundSomething(SyntheticBase):
         empty = os.path.join(self.tmp, "none")
         os.makedirs(empty)
         saved = (browser.CHROMIUM_ROOTS, browser.ROAMING, browser.LOCAL,
-                 browser.FIREFOX_ROOTS)
+                 browser.FIREFOX_ROOTS, browser.SAFARI_LIBRARY)
         browser.CHROMIUM_ROOTS = [("test", root)]
         browser.ROAMING = empty
         browser.LOCAL = empty
+        browser.SAFARI_LIBRARY = ""
         browser.FIREFOX_ROOTS = []
         try:
             results.append(browser.run(quiet_ctx(self.iocs)))
         finally:
             (browser.CHROMIUM_ROOTS, browser.ROAMING, browser.LOCAL,
-             browser.FIREFOX_ROOTS) = saved
+             browser.FIREFOX_ROOTS, browser.SAFARI_LIBRARY) = saved
 
         for r in results:
             self.assertTrue(r.hits, "{}: synthetic positive not detected"

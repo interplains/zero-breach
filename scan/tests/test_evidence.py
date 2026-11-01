@@ -47,16 +47,17 @@ def run_browser_on(tmp, root):
     empty = os.path.join(tmp, "empty")
     os.makedirs(empty, exist_ok=True)
     saved = (browser.CHROMIUM_ROOTS, browser.ROAMING, browser.LOCAL,
-             browser.FIREFOX_ROOTS)
+             browser.FIREFOX_ROOTS, browser.SAFARI_LIBRARY)
     try:
         browser.CHROMIUM_ROOTS = [("test", root)]
         browser.ROAMING = empty
         browser.LOCAL = empty
+        browser.SAFARI_LIBRARY = ""
         browser.FIREFOX_ROOTS = []   # hermetic: never read the real Firefox
         return browser.run(ctx)
     finally:
         (browser.CHROMIUM_ROOTS, browser.ROAMING, browser.LOCAL,
-         browser.FIREFOX_ROOTS) = saved
+         browser.FIREFOX_ROOTS, browser.SAFARI_LIBRARY) = saved
 
 
 class TestHstsIsContactedGrade(unittest.TestCase):

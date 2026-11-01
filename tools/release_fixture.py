@@ -170,6 +170,7 @@ def main():
         for mod, name, value in (
                 (browser, "CHROMIUM_ROOTS", [("fixture", str(profile.parent))]),
                 (browser, "FIREFOX_ROOTS", []),
+                (browser, "SAFARI_LIBRARY", ""),
                 (hashes, "_roots", lambda: [str(files)]),
                 (patterns, "_pattern_roots", lambda: [str(files)]),
                 (host, "winreg", object()),
