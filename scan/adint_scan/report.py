@@ -21,7 +21,8 @@ from . import __version__
 from .iocs import IocSet
 from .result import (CLEAN, HITS, PARTIAL, UNKNOWN, ModuleResult, is_serious,
                      EV_ON_DISK, EV_FILE_PATTERN, EV_PERSISTENCE, EV_CONTACTED, EV_ATTEMPTED,
-                     EV_CONFIGURED, EV_REFERENCED, EV_DNS)
+                     EV_CONFIGURED, EV_REFERENCED, EV_DNS, EV_ENCODED,
+                     EV_HIDDEN_CODE)
 
 # The exact text required by D1. Do not reword.
 D1_LINE = ("No known indicators were found in the places that can be checked. "
@@ -145,6 +146,8 @@ _METRIC_LABELS = {
     "connection_records": "saved connection records checked",
     "files_hashed": "files fingerprinted",
     "files_pattern_scanned": "files checked against Candiru patterns",
+    "files_obfuscation_searched": "files searched for disguised indicators",
+    "code_files_checked": "   of those, script/code files checked for hidden code",
     "bytes_pattern_scanned": "bytes checked against Candiru patterns",
     "com_registrations": "auto-start COM registrations reviewed",
     "com_user_writable": "   of those, in a folder you can write to",
@@ -230,6 +233,7 @@ def render_human(document: Dict[str, Any]) -> str:
             # cached page text.
             order = {EV_ON_DISK: 0, EV_FILE_PATTERN: 0.5, EV_PERSISTENCE: 1, EV_CONTACTED: 2,
                      EV_DNS: 3, EV_ATTEMPTED: 4, EV_CONFIGURED: 5,
+                     EV_ENCODED: 5.3, EV_HIDDEN_CODE: 5.6,
                      EV_REFERENCED: 6, "": 0}
             for h in sorted(m["hits"], key=lambda x: order.get(x.get("evidence", ""), 0)):
                 prov = "{}/{}".format(h["tier"], h["confidence"]) if h["tier"] else "?"
@@ -484,6 +488,9 @@ TIER_MEANING = {
                    "current ownership and activity are not established."),
     "sample": ("The file fingerprint of a published Candiru sample. A match "
                "here is conclusive, not circumstantial."),
+    "hidden-code": ("Not an indicator from this campaign. A script or code "
+                    "file contains characters or strings used to hide what "
+                    "code does. Some honest software does this too."),
     "candiru-pattern": ("A published Candiru detection rule matched patterns "
                         "inside a file. This needs expert verification; it is "
                         "not an exact sample identification or proof that "
@@ -520,6 +527,13 @@ EVIDENCE_MEANING = {
                    "blocked the connection"),
     EV_CONFIGURED: ("the name is in local configuration pointing at a real "
                     "address (a protective block entry is not reported at all)"),
+    EV_ENCODED: ("the name is stored reversed or bit-inverted inside this "
+                 "file. Pages that mention it write it forwards, so this looks "
+                 "deliberate - more than a reference - but it does not show "
+                 "that this device contacted it"),
+    EV_HIDDEN_CODE: ("a script contains characters or strings used to hide "
+                     "code. It is a construction to look at, not contact with "
+                     "any indicator and not proof of infection"),
     EV_REFERENCED: ("the name appeared in saved page content - most often a page "
                     "ABOUT this campaign, not contact with it"),
 }
@@ -535,6 +549,8 @@ EVIDENCE_HEADLINE = {
     EV_DNS: "THIS INDICATOR APPEARS IN LOCAL DNS RECORDS",
     EV_ATTEMPTED: "THIS DEVICE TRIED TO REACH THIS INFRASTRUCTURE (a filter blocked it)",
     EV_CONFIGURED: "THIS INFRASTRUCTURE IS CONFIGURED ON THIS MACHINE",
+    EV_ENCODED: "AN INDICATOR IS STORED DISGUISED IN A FILE - NEEDS REVIEW",
+    EV_HIDDEN_CODE: "A SCRIPT CONTAINS HIDDEN OR DISGUISED CODE - WORTH A LOOK",
 }
 
 
@@ -692,6 +708,8 @@ def _recommended_action(hit) -> int:
     evidence, tier = hit.get("evidence"), hit.get("tier")
     if evidence == EV_REFERENCED:
         return 0
+    if evidence == EV_HIDDEN_CODE:
+        return 1
     if evidence == EV_ON_DISK and tier == "vuln-driver":
         return 1
     if evidence in (EV_ON_DISK, EV_PERSISTENCE):
@@ -707,6 +725,11 @@ def _advice_paragraph(w, text):
         w("    " + line)
 
 
+# Grades whose own paragraph in _next_steps is the whole advice. Mixed with any
+# other grade, the general advice for that grade follows as well.
+_SELF_EXPLAINED = (EV_FILE_PATTERN, EV_ENCODED, EV_HIDDEN_CODE, EV_REFERENCED)
+
+
 def _next_steps(w, hits):
     action = max(_recommended_action(h) for h in hits)
     w("  WHAT TO DO")
@@ -717,8 +740,28 @@ def _next_steps(w, hits):
                          "open, run or delete the file. A pattern match alone "
                          "does not prove infection or that the file executed.")
         w("")
-        if all(h.get("evidence") in (EV_FILE_PATTERN, EV_REFERENCED) for h in hits):
-            return
+    if any(h.get("evidence") == EV_ENCODED for h in hits):
+        _advice_paragraph(w, "An indicator was found written backwards or "
+                         "bit-inverted inside a file. Ordinary pages name it "
+                         "forwards, so this looks deliberate. It does not show "
+                         "that this device contacted the server or that "
+                         "anything ran. Preserve the file and this report and "
+                         "ask a qualified incident responder to look at it; do "
+                         "not open, run or delete the file.")
+        w("")
+    if any(h.get("evidence") == EV_HIDDEN_CODE for h in hits):
+        _advice_paragraph(w, "A script contains characters or strings used to "
+                         "hide code. Some legitimate software does this, and "
+                         "it is not a trace of this campaign. Check which "
+                         "extension or download the file belongs to. If you "
+                         "do not recognise it, keep the file and ask someone "
+                         "qualified to review it before removing anything.")
+        w("")
+    if all(h.get("evidence") in _SELF_EXPLAINED for h in hits):
+        if any(h.get("evidence") == EV_ENCODED for h in hits):
+            _advice_paragraph(w, "Do NOT open, visit or look up indicator "
+                             "addresses. Keep the [.] spelling when sharing them.")
+        return
     if action == 3:
         _advice_paragraph(w, "Seek expert help promptly. Preserve this report and "
                          "the named files or registrations. Do NOT delete, move, "
@@ -945,7 +988,8 @@ def _dedup_serious(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Collapse repeats of the same indicator at the same grade, strongest grade
     first, so one domain found in three cache files is one line, not three."""
     order = {g: i for i, g in enumerate(
-        [EV_ON_DISK, EV_PERSISTENCE, EV_CONTACTED, EV_DNS, EV_ATTEMPTED, EV_CONFIGURED])}
+        [EV_ON_DISK, EV_PERSISTENCE, EV_CONTACTED, EV_DNS, EV_ATTEMPTED, EV_CONFIGURED,
+         EV_ENCODED, EV_HIDDEN_CODE])}
     seen = {}
     for h in hits:
         key = (h["indicator"], h.get("evidence", ""))

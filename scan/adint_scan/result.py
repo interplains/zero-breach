@@ -32,10 +32,12 @@ EV_CONTACTED = "contacted"      # the device demonstrably talked to the host
 EV_DNS = "dns-record"           # a resolver record; endpoint contact unverified
 EV_ATTEMPTED = "attempted"      # a lookup happened but a filter blocked it
 EV_CONFIGURED = "configured"    # named in local config, NOT as a block
+EV_ENCODED = "encoded"          # an indicator stored reversed or bit-inverted
+EV_HIDDEN_CODE = "hidden-code"  # code built to hide what it does; no indicator
 EV_REFERENCED = "referenced"    # the string appeared in saved content
 
 EVIDENCE_ORDER = [EV_ON_DISK, EV_FILE_PATTERN, EV_PERSISTENCE, EV_CONTACTED, EV_DNS, EV_ATTEMPTED,
-                  EV_CONFIGURED, EV_REFERENCED]
+                  EV_CONFIGURED, EV_ENCODED, EV_HIDDEN_CODE, EV_REFERENCED]
 
 # Everything except `referenced` is a finding that needs a person to look at it.
 # This is deliberately a DENY-list of the one benign grade rather than an
@@ -79,6 +81,13 @@ class Hit:
     #   configured - the name appears in local configuration (e.g. the hosts
     #                file) pointing somewhere REAL. A block entry (0.0.0.0) is
     #                protective and is not reported as a hit at all.
+    #   encoded    - (opt-in --obfuscated) the indicator is stored reversed or
+    #                bit-inverted inside a file. Pages and articles name these
+    #                hosts forwards, so this implies deliberate encoding - more
+    #                than a reference - but it is not contact.
+    #   hidden-code- (opt-in --obfuscated) a script contains characters or
+    #                strings used to hide code. No indicator is involved; it is
+    #                a construction to investigate, not contact or infection.
     #   referenced - the string appeared in cached page content or history text.
     #                That is often just a page ABOUT the indicator - a news
     #                article, a report, a blocklist. Usually NOT contact.

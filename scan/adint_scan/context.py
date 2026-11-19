@@ -34,3 +34,5 @@ class ScanContext:
     # optional pattern module consumes these; explicit --pattern-path wins.
     pattern_candidate_paths: tuple = ()
     pattern_candidate_omitted: int = 0
+    # Opt-in search for disguised indicators and hidden code (--obfuscated).
+    obfuscated: bool = False

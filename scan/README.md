@@ -40,7 +40,7 @@ python -X utf8 adint-scan.py
 ```
 
 ```
-adint-scan [--deep] [--quick] [--json PATH] [--iocs PATH] [--patterns] [--pattern-path ABSOLUTE_PATH]
+adint-scan [--deep] [--quick] [--obfuscated] [--json PATH] [--iocs PATH] [--patterns] [--pattern-path ABSOLUTE_PATH]
 ```
 
 | flag | effect |
@@ -52,6 +52,7 @@ adint-scan [--deep] [--quick] [--json PATH] [--iocs PATH] [--patterns] [--patter
 | `--deep` | tier 2: full persistence sweep. Not implemented — the flag reports an honest `UNKNOWN` gap rather than faking a sweep |
 | `--patterns` | opt-in, bounded check against two published Candiru file rules; requires Python 3.9+ and the pinned optional YARA-X wheel |
 | `--pattern-path ABSOLUTE_PATH` | file or folder for the optional pattern check; repeatable and requires `--patterns` |
+| `--obfuscated` | opt-in: also look for indicators stored in disguise and for script files built to hide code (see below). Standard library only |
 
 Exit codes: `0` nothing found, `2` an indicator matched, `1` the scan could not
 be set up. This release changes no system settings and needs no administrator.
@@ -65,6 +66,7 @@ after use. `--json PATH` writes the report you request.
 | `browser` | history, cookies, favicons, HTTP cache, LevelDB and Service Worker caches across Chrome / Edge / Brave / Vivaldi / Chromium (every profile) and Firefox. Locked databases are copied before being opened. |
 | `hash` | SHA-256 of candidate files under AppData, ProgramData, both Temps, Downloads, Desktop, Documents and Public, against the sample hashes in the IOC set. |
 | `host` | per-user COM registrations (this chain's documented persistence), the DNS resolver cache, up to 50,000 recent retained DNS-history events on Windows, and the hosts file. Older retained events are an explicit gap. |
+| `obfuscated` (optional) | the browser cache, storage and Extensions folders, plus the hash check's user-writable folders, for disguised indicators; script files there for hidden code. Cookie, login and history databases are not opened. |
 | `patterns` (optional) | file bytes checked against two published Candiru research rules; without an explicit pattern path, safely checks up to 128 local user-writable COM server files first. A match needs investigation and cannot confirm infection. |
 
 Why the browser module looks at the cache and not just history: history records
@@ -72,6 +74,37 @@ only top-level navigations, and an ad is a subresource inside an iframe. A real
 impression would never appear in history. The cache, cookie stores and LevelDB
 files do record subresource origins — and they are short-lived, which is part of
 the honest answer about how far back any of this can see.
+
+### Disguised indicators and hidden code (`--obfuscated`)
+
+The other checks match an indicator only as it is normally written. Malware
+that wants an address to survive a text search stores it some other way: the
+YIPPHB loader kept its URL backwards (`.../moc.lruynit//:sptth`), and the March
+2026 axios / plain-crypto-js npm compromise shipped its payload reversed. This
+check looks for every domain and IP in the set written backwards, in reverse-DNS
+order (`net.example`, as app bundle IDs carry names), bit-inverted (XOR 0xFF), or
+backwards and bit-inverted. The usual boundary rules apply, so a reversed IP
+inside a longer number does not match.
+
+A page about the campaign writes an indicator forwards, so a disguised copy
+is graded `encoded`: more than a saved reference, but **not** evidence that
+the device contacted it.
+
+In script and code files it also looks for constructions used to hide code,
+whoever wrote them: a right-to-left direction control left open at the end of a
+line (Trojan Source, CVE-2021-42574), runs of eight or more invisible characters
+(GlassWorm and os-info-checker-es6, 2025; Unicode tag "ASCII smuggling"; the
+2021 Hangul-filler backdoor), backwards URLs, and backwards base64 string
+literals. These are graded `hidden-code`. They have nothing to do with this
+campaign's indicators and are not a sign of infection; some honest software
+trips them. Check which extension or download the file belongs to.
+
+It is opt-in because it reads many more files than the default scan and
+because its code rules are heuristics, which the default scan does not use.
+Right-to-left translation folders (`_locales`, `i18n*` and similar), flag emoji
+and single emoji modifiers are deliberately ignored. UTF-16 text and compressed
+add-ons (Firefox `.xpi`) are not decoded, and folders the hash check prunes
+(`node_modules`, `.git`, caches) are not walked in the user folders.
 
 ## Turning on DNS history (the one thing worth doing for next time)
 

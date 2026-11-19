@@ -7,8 +7,9 @@ which is a much better thing to be able to promise someone receiving a script fr
 a friend.
 
 The only transformation applied to the module sources is renaming the two names
-that collide across the three scan modules (NAME and run), plus dropping the
-package-internal imports, since everything lands in one namespace.
+that collide across the scan modules (NAME and run), plus dropping the
+package-internal imports, since everything lands in one namespace. A module
+that imports a name under an alias gets that alias re-emitted as one line.
 """
 import io
 import os
@@ -163,6 +164,7 @@ A('USAGE')
 A('  python -X utf8 zero-breach.py')
 A('  python -X utf8 zero-breach.py --json report.json')
 A('  python -X utf8 zero-breach.py --patterns   # optional YARA-X setup required')
+A('  python -X utf8 zero-breach.py --obfuscated # also disguised indicators, hidden code')
 A('')
 A('Requires Python 3.8 or newer. Needs no administrator. All supported platforms')
 A('get browser and file checks; Windows also gets host checks.')
@@ -201,10 +203,13 @@ for label, fname in (("result", "result.py"),
 for label, fname, suffix in (("modules/browser", "browser.py", "browser"),
                              ("modules/hashscan", "hashscan.py", "hash"),
                              ("modules/host", "host.py", "host"),
-                             ("modules/patternscan", "patternscan.py", "patterns")):
+                             ("modules/patternscan", "patternscan.py", "patterns"),
+                             ("modules/obfuscated", "obfuscated.py", "obfuscated")):
     A('# --- {} {}'.format(label, '-' * max(0, 72 - len(label))))
     if suffix == "patterns":
         A('_pattern_roots = _roots  # hash module default local roots')
+    if suffix == "obfuscated":
+        A('_obf_binary_exts, _obf_prune_dirs, _obf_hash_roots = EXTS, PRUNE_DIRS, _roots')
     A(namespace(strip_imports(read(os.path.join(PKG, "modules", fname))), suffix))
     A('')
 
@@ -286,6 +291,10 @@ def main(argv=None):
     p.add_argument("--pattern-path", action="append", default=[], metavar="PATH",
                    help="file or folder for --patterns (repeatable). Limits only "
                         "the pattern check, not the other checks")
+    p.add_argument("--obfuscated", action="store_true",
+                   help="also look for indicators stored reversed or "
+                        "bit-inverted, and for script files built to hide "
+                        "code. Slower; a hit means investigate.")
     args = p.parse_args(sys.argv[1:] if argv is None else argv)
     if args.pattern_path and not args.patterns:
         p.error("--pattern-path requires --patterns")
@@ -321,7 +330,8 @@ def main(argv=None):
         return 1
 
     ctx = ScanContext(iocs=ioc_set, quick=args.quick, patterns=args.patterns,
-                      pattern_paths=tuple(args.pattern_path))
+                      pattern_paths=tuple(args.pattern_path),
+                      obfuscated=args.obfuscated)
     started = datetime.datetime.now()
     results = []
     # The whole scan runs inside the no-network guard (see the header).
@@ -329,6 +339,8 @@ def main(argv=None):
         modules = [("browser", run_browser), ("hash", run_hash), ("host", run_host)]
         if args.patterns:
             modules.append(("patterns", run_patterns))
+        if args.obfuscated:
+            modules.append(("obfuscated", run_obfuscated))
         for name, fn in modules:
             if name == "hash" and args.quick:
                 r = ModuleResult("hash")

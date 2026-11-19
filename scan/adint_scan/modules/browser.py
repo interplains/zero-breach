@@ -106,6 +106,16 @@ def _chromium_roots():
 # Computed at import so the test-suite can monkeypatch this attribute directly.
 CHROMIUM_ROOTS = _chromium_roots()
 
+# Per-profile cache and storage folders searched as raw bytes. A module-level
+# name so the opt-in obfuscation check walks exactly the same folders.
+CHROMIUM_BLOB_DIRS = (
+    (("Cache", "Cache_Data"), EV_REFERENCED),
+    (("Code Cache", "js"), EV_REFERENCED),
+    (("Local Storage", "leveldb"), EV_CONTACTED),
+    (("Session Storage",), EV_CONTACTED),
+    (("Service Worker", "CacheStorage"), EV_CONTACTED),
+)
+
 # Firefox (profiles_dir, cache_dir) pairs. None means "derive from the platform
 # at run() time"; tests set an explicit list so the suite never reads the real
 # profile on any OS (the Windows branch of _firefox_roots used to be the only one
@@ -1197,12 +1207,7 @@ def run(ctx) -> ModuleResult:
             scan_cookies(label, os.path.join(prof, "Cookies"), "chromium")
             scan_favicons(label, os.path.join(prof, "Favicons"), "chromium")
             scan_connection_records(label, prof)
-            for sub, evidence in (
-                    (("Cache", "Cache_Data"), EV_REFERENCED),
-                    (("Code Cache", "js"), EV_REFERENCED),
-                    (("Local Storage", "leveldb"), EV_CONTACTED),
-                    (("Session Storage",), EV_CONTACTED),
-                    (("Service Worker", "CacheStorage"), EV_CONTACTED)):
+            for sub, evidence in CHROMIUM_BLOB_DIRS:
                 scan_blobs(label, os.path.join(prof, *sub), evidence)
 
     # --- Firefox: roaming profiles for the dbs, local cache for the cache ---

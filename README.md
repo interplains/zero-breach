@@ -51,6 +51,7 @@ updates or establish that a device is safe.
 | **Browser** | history, cookies (host names and timestamps only), favicons, HTTP cache, Local/Session Storage, Service Worker caches, and HSTS/connection records — across Chrome, Edge, Brave, Vivaldi, Chromium and Firefox, for discovered profiles in supported locations |
 | **Files** | SHA-256 of candidate files under the user-writable locations spyware drops into, against known sample hashes — and, kept deliberately separate, the hash of a legitimate signed driver this actor abuses, which is reported as a lead rather than as proof |
 | **Host** (Windows) | per-user COM registrations (this campaign's documented persistence), the DNS resolver cache, whether DNS history logging is even enabled, the hosts file, and known fixed-path driver drops (e.g. the `HW.sys` vulnerable driver) |
+| **Disguised indicators and hidden code** (opt-in, `--obfuscated`) | the same browser cache, storage and extension folders and user-writable folders, for indicators written backwards, in reverse-DNS order or bit-inverted; and script files there for invisible characters, text-direction tricks and backwards URLs or base64. Leads to investigate, not proof of contact or infection; see [scan/README.md](scan/README.md) |
 
 Every match is **evidence-graded**, because the artifact decides the meaning.
 Cookie metadata and stored connection records can support a contact finding,
@@ -90,6 +91,7 @@ or Linux use `python3` in place of `python` in the commands below.
 python -X utf8 zero-breach.py            # full scan
 python -X utf8 zero-breach.py --quick    # faster; skips file fingerprinting
 python -X utf8 zero-breach.py --json report.json
+python -X utf8 zero-breach.py --obfuscated  # also disguised indicators, hidden code
 ```
 
 **Optional Candiru file patterns:** Download `requirements-patterns.txt` from

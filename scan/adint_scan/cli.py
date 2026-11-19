@@ -1,6 +1,6 @@
 """Command-line entry point and orchestration.
 
-  adint-scan [--deep] [--quick] [--json <path>] [--iocs <path>]
+  adint-scan [--deep] [--quick] [--obfuscated] [--json <path>] [--iocs <path>]
 
 Default behaviour (no flags): read-only tier-1 IOC match across the browser, hash
 and host modules, under the no-network guard. Requires no administrator (D7).
@@ -80,6 +80,10 @@ def _parse(argv: List[str]) -> argparse.Namespace:
                    help="file or folder for --patterns (repeatable). Limits only "
                         "the pattern check; browser, hash and host checks keep "
                         "their usual scope.")
+    p.add_argument("--obfuscated", action="store_true",
+                   help="also look for indicators stored reversed or "
+                        "bit-inverted, and for script files built to hide "
+                        "code. Slower; a hit means investigate.")
     p.add_argument("--json", metavar="PATH",
                    help="also write the machine-readable report to PATH.")
     p.add_argument("--iocs", metavar="PATH", default=_default_ioc_path(),
@@ -104,6 +108,9 @@ def _run_modules(ctx: ScanContext) -> List[ModuleResult]:
         if ctx.patterns:
             from .modules import patternscan
             modules.append(patternscan)
+        if ctx.obfuscated:
+            from .modules import obfuscated
+            modules.append(obfuscated)
         for mod in modules:
             # --quick drops the file-fingerprint check. It costs ~45% of the
             # whole scan (345s of 774s measured) to look for ONE published file
@@ -214,7 +221,8 @@ def main(argv: List[str] = None) -> int:
               file=sys.stderr)
 
     ctx = ScanContext(iocs=iocs, deep=args.deep, quick=args.quick,
-                      patterns=args.patterns, pattern_paths=tuple(args.pattern_path))
+                      patterns=args.patterns, pattern_paths=tuple(args.pattern_path),
+                      obfuscated=args.obfuscated)
     started = datetime.datetime.now()
     results = _run_modules(ctx)
 
